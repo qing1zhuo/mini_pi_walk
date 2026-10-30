@@ -14,7 +14,7 @@ wandb/
 *.trt
 
 # Evaluation media and local editor files
-*.mp4
+
 .vscode/
 .idea/
 
