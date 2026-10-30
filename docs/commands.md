@@ -37,21 +37,28 @@ python scripts/train.py \
   --run_name track_ang_vel_30_3 \
   --headless
 # 评测最新model
-
-python -m humanoid.scripts.play.py \
+conda activate pi_env
+export WANDB_MODE=offline
+export WANDB_SILENT=true
+cd ~/minipi/mini_pi_walk
+python -m humanoid.scripts.play \
   --task pai_ppo \
-  --experiment_name Pai_reward \
-  --load_run Oct27_14-27-01_feet_dist_1\
+  --experiment_name baseline \
+  --load_run Oct30_23-51-13_v1 \
   --checkpoint -1 \
   --num_envs 64 \
   --headless \
-  --rl_device=cuda:1 \
-  --sim_device=cuda:1
+  --rl_device cuda:1 \
+  --sim_device cuda:1
 
 # sim2sim测评
-python scripts/sim2sim.py \
+conda activate pi_env
+export WANDB_MODE=offline
+export WANDB_SILENT=true
+cd ~/minipi/mini_pi_walk
+python -m humanoid.scripts.sim2sim \
   --headless \
-  --load_model /home/jingwei/minipi/Mini_Pi_RL_Baseline/logs/Pai_stage0/exported/policies/policy_torch.pt
+  --load_model /home/jingwei/minipi/mini_pi_walk/logs/baseline/exported/policies/policy_torch.pt
 
 # 模型格式转换
 /usr/src/tensorrt/bin/trtexec \
