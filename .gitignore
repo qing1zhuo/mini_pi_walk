@@ -1,0 +1,25 @@
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Training and experiment runtime outputs
+logs/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.engine
+*.trt
+
+# Evaluation media and local editor files
+*.mp4
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+Thumbs.db
