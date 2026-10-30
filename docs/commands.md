@@ -10,20 +10,20 @@ tmux kill-session -t dev     # 删除指定会话
 tmux kill-server             # 关闭所有 tmux 会话
 
 # 训练
-cd /home/jingwei/minipi/Mini_Pi_RL_Baseline/humanoid
 conda activate pi_env
 export WANDB_MODE=offline
 export WANDB_SILENT=true
-python scripts/train.py \
+cd ~/minipi/mini_pi_walk
+python -m humanoid.scripts.train \
   --task=pai_ppo \
-  --experiment_name Pai_reward \
-  --run_name=feet_dist_1\
+  --experiment_name=baseline \
+  --run_name=v1 \
   --headless \
   --num_envs=2048 \
-  --sim_device=cuda:1 \
-  --rl_device=cuda:1 \
+  --sim_device=cuda:0 \
+  --rl_device=cuda:0 \
   --graphics_device_id=-1 \
-  --max_iterations=10001
+  --max_iterations=100
 
 续训
 python scripts/train.py \
@@ -37,12 +37,8 @@ python scripts/train.py \
   --run_name track_ang_vel_30_3 \
   --headless
 # 评测最新model
-python scripts/play.py \
-  --task=pai_ppo \
-  --run_name=v1 \
-  --headless
 
-python scripts/play.py \
+python -m humanoid.scripts.play.py \
   --task pai_ppo \
   --experiment_name Pai_reward \
   --load_run Oct27_14-27-01_feet_dist_1\

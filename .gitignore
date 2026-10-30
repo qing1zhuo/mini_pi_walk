@@ -7,9 +7,7 @@ __pycache__/
 venv/
 
 # Training and experiment runtime outputs
-logs/
 wandb/
-*.pt
 *.pth
 *.ckpt
 *.engine
