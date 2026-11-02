@@ -364,7 +364,7 @@ class PaiFreeEnv(LeggedRobot):
         """
         contact = self.contact_forces[:, self.feet_indices, 2] > 5.0
         foot_speed_norm = torch.norm(
-            self.rigid_state[:, self.feet_indices, 7:9], dim=2   # TODO PR
+            self.rigid_state[:, self.feet_indices, 10:12], dim=2   # TODO PR
         )
         rew = torch.sqrt(foot_speed_norm)
         rew *= contact
