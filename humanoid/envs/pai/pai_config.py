@@ -196,7 +196,7 @@ class PaiCfg(LeggedRobotCfg):
 
         lateral_min_dist = 0.18  # 横移时两脚最小期望水平间距，单位 m；不影响膝距
         lateral_max_dist = 0.22  # 横移时两脚最大期望水平间距，单位 m
-        lateral_vel_threshold = 0.10  # |vy 指令| 高于此值时使用横移区间，与 vx/yaw 指令无关，单位 m/s
+        lateral_vel_threshold = 1000  # |vy 指令| 高于此值时使用横移区间，与 vx/yaw 指令无关，单位 m/s
 
         target_joint_pos_scale = 0.08  # 正弦参考步态的基础关节摆幅，单位 rad
         target_feet_height = 0.02  # 摆动脚累计抬高量的目标值，单位 m
