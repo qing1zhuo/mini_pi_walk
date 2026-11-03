@@ -51,7 +51,7 @@ class PaiCfg(LeggedRobotCfg):
         flip_visual_attachments = False
         replace_cylinder_with_capsule = False
         # False 表示机器人根节点自由运动。
-        fix_base_link = True
+        fix_base_link = False
 
     class terrain(LeggedRobotCfg.terrain):
         # 当前是平地；下方网格尺寸、地形比例与课程参数暂不参与生成。

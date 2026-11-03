@@ -316,8 +316,8 @@ class LeggedRobot(BaseTask):
         if self.cfg.asset.fix_base_link:
             self.root_states[env_ids,7:13]=0.0
             self.root_states[env_ids,2]+=1.8
-        else:
-            self.root_states[env_ids, 7:13] = torch_rand_float(-0.05, 0.05, (len(env_ids), 6), device=self.device)
+        # else:
+        #     self.root_states[env_ids, 7:13] = torch_rand_float(-0.05, 0.05, (len(env_ids), 6), device=self.device)
 
         env_ids_int32=env_ids.to(dtype=torch.int32)
 
