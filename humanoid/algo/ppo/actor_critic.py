@@ -2,7 +2,6 @@ import copy
 import torch
 from torch import nn
 from torch.distributions import Normal
-import math
 class ActorCritic(nn.Module):
     def __init__(
         self,
@@ -101,9 +100,7 @@ class ActorCritic(nn.Module):
         print(f"Actor Model: {self.actor}")
         print(f"Critic Model: {self.critic}")
 
-        self.log_std=nn.Parameter(
-            torch.full((num_actions,),math.log(init_noise_std)) # TODO PR 所有log_std都要
-        )
+        self.std=nn.Parameter(init_noise_std*torch.ones(num_actions))
         self.distribution=None
         Normal.set_default_validate_args=False
     
@@ -182,7 +179,7 @@ class ActorCritic(nn.Module):
 
     def update_distribution(self,observations):
         mean=self._actor_forward(observations)
-        self.distribution=Normal(mean,self.log_std.exp())
+        self.distribution=Normal(mean,mean*0.0+self.std)
     
     def act(self,observations,**kwargs):
         self.update_distribution(observations)

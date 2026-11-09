@@ -213,7 +213,7 @@ class OnPolicyRunner:
                 
         # 动作分布的平均标准差用于观察探索强度；FPS 表示所有环境合计
         # 每秒处理的采样步数，分母同时包含采样耗时和学习耗时。
-        mean_std=self.alg.actor_critic.log_std.exp().mean()
+        mean_std=self.alg.actor_critic.std.mean()
         fps=int(
             self.num_steps_per_env*self.env.num_envs/(locs["collection_time"]+locs["learn_time"])
         )
