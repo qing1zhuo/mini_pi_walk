@@ -13,14 +13,14 @@ wandb/
 *.engine
 *.trt
 
-model_1000.pth
-model_2000.pth
-model_3000.pth
-model_4000.pth
-model_6000.pth
-model_7000.pth
-model_8000.pth
-model_9000.pth
+model_1000.pt
+model_2000.pt
+model_3000.pt
+model_4000.pt
+model_6000.pt
+model_7000.pt
+model_8000.pt
+model_9000.pt
 
 # Evaluation media and local editor files
 
