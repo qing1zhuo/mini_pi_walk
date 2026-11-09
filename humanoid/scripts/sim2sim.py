@@ -66,7 +66,7 @@ class Sim2simConfig:
 
 KP = np.array([40, 20, 20, 40, 40, 20] * 2, dtype=np.float64)
 KD = np.array([0.6, 0.4, 0.4, 0.6, 0.6, 0.4] * 2, dtype=np.float64)
-TAU_LIMIT = np.full(12, 17.85, dtype=np.float64)
+TAU_LIMIT = np.full(12, 16.0, dtype=np.float64)
 
 
 def wrap_to_pi(angle):
