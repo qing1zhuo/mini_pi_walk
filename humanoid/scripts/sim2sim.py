@@ -380,7 +380,7 @@ def resolve_run_dir(load_model, explicit_run_dir):
 
     raise ValueError(
         "Cannot infer the training run from --load_model. Pass --run_dir, for example "
-        "--run_dir logs/gru/Nov08_22-06-57_v2."
+        "--run_dir logs/baseline/Nov03_22-08-17_v1."
     )
 
 
@@ -481,7 +481,7 @@ def evaluate(args):
 
 
 def parse_args():
-    default_policy = Path(LEGGED_GYM_ROOT_DIR) / "logs/gru/exported/policies/policy_torch.pt"
+    default_policy = Path(LEGGED_GYM_ROOT_DIR) / "logs/baseline/exported/policies/baseline-v1.pt"
     default_mujoco_model = (
         Path(LEGGED_GYM_ROOT_DIR)
         / "resources/robots/pi_12dof_release_v1/mjcf/pi_12dof_release_v1.xml"

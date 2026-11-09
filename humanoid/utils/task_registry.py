@@ -1,7 +1,7 @@
 import os
 from typing import Tuple
 from datetime import datetime
-from humanoid.algo import GRUOnPolicyRunner, OnPolicyRunner, VecEnv
+from humanoid.algo import OnPolicyRunner, VecEnv
 
 from humanoid import LEGGED_GYM_ENVS_DIR,LEGGED_GYM_ROOT_DIR
 from .helpers import *
