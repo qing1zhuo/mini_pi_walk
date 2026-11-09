@@ -1,244 +1,509 @@
+import argparse
+import csv
+import json
 import math
-import numpy as np
-import mujoco, mujoco_viewer
-from tqdm import tqdm
+import time
 from collections import deque
-from scipy.spatial.transform import Rotation as R
-from humanoid import LEGGED_GYM_ROOT_DIR
-from humanoid.envs import PaiCfg
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+
+import mujoco
+import numpy as np
 import torch
-import threading
-import glfw
-import matplotlib.pyplot as plt
-import time  # 新增导入time模块
+from tqdm import tqdm
 
-class cmd:
-    vx = 0.
-    vy = 0.
-    dyaw = 0.
+from humanoid import LEGGED_GYM_ROOT_DIR
 
-class mujoco_visual:
-    def __init__(self, headless=False) -> None:
-        self.headless = headless
-        self.count_lowlevel = 0
-        self.stop_event = threading.Event()
-        self.vel = [0,0,0]
-        self.w = [0,0,0]
-        # 键位映射（避开图片中的C/J/G/M/T/V/E）
-        self.key_states = {
-            # 方向控制
-            glfw.KEY_UP: False,
-            glfw.KEY_DOWN: False,
-            glfw.KEY_LEFT: False,
-            glfw.KEY_RIGHT: False,
-            glfw.KEY_W: False,  # 新增
-            glfw.KEY_S: False,   # 新增
-            glfw.KEY_A: False,   # 新增
-            glfw.KEY_D: False,   # 新增
-            # 图片功能键（保持原有）
-            glfw.KEY_C: False,
-            glfw.KEY_J: False,
-            glfw.KEY_G: False,
-            glfw.KEY_M: False,
-            glfw.KEY_T: False,
-            glfw.KEY_V: False,
-            glfw.KEY_E: False
-        }
 
-    def quaternion_to_euler_array(self, quat):
-        x, y, z, w = quat
-        t0 = +2.0 * (w * x + y * z)
-        t1 = +1.0 - 2.0 * (x * x + y * y)
-        roll_x = np.arctan2(t0, t1)
-        
-        t2 = +2.0 * (w * y - z * x)
-        t2 = np.clip(t2, -1.0, 1.0)
-        pitch_y = np.arcsin(t2)
-        
-        t3 = +2.0 * (w * z + x * y)
-        t4 = +1.0 - 2.0 * (y * y + z * z)
-        yaw_z = np.arctan2(t3, t4)
-        
-        return np.array([roll_x, pitch_y, yaw_z])
+# x/y are body-frame velocity commands; heading is a world-frame target angle.
+# Keep this list aligned with humanoid/scripts/play.py.
+COMMANDS = (
+    ("stand", 0.0, 0.0, 0.0),
+    ("forward_slow", 0.3, 0.0, 0.0),
+    ("forward_fast", 0.6, 0.0, 0.0),
+    ("backward", -0.3, 0.0, 0.0),
+    ("left", 0.0, 0.3, 0.0),
+    ("right", 0.0, -0.3, 0.0),
+    ("turn_left", 0.0, 0.0, math.pi / 2),
+    ("turn_right", 0.0, 0.0, -math.pi / 2),
+    ("turn_around", 0.0, 0.0, math.pi),
+    ("forward_turn_left", 0.3, 0.0, math.pi / 2),
+    ("forward_turn_right", 0.3, 0.0, -math.pi / 2),
+)
 
-    def get_obs(self, data):
-        q = data.qpos.astype(np.double)
-        dq = data.qvel.astype(np.double)
-        quat = data.sensor('orientation').data[[1, 2, 3, 0]].astype(np.double)
-        r = R.from_quat(quat)
-        v = r.apply(data.qvel[:3], inverse=True).astype(np.double)
-        self.vel = [v[0], v[1], v[2]]
-        omega = data.sensor('angular-velocity').data.astype(np.double)
-        self.w = omega
-        gvec = r.apply(np.array([0., 0., -1.]), inverse=True).astype(np.double)
-        return (q, dq, quat, v, omega, gvec)
 
-    def pd_control(self, target_q, q, kp, target_dq, dq, kd):
-        return (target_q - q) * kp + (target_dq - dq) * kd
+@dataclass(frozen=True)
+class Sim2simConfig:
+    mujoco_model_path: str
+    duration: float = 12.0
+    dt: float = 0.001
+    decimation: int = 10
+    cycle_time: float = 0.4
+    frame_stack: int = 15
+    num_single_obs: int = 47
+    num_actions: int = 12
+    action_scale: float = 0.25
+    clip_observations: float = 18.0
+    clip_actions: float = 18.0
+    lin_vel_scale: float = 2.0
+    ang_vel_scale: float = 1.0
+    dof_pos_scale: float = 1.0
+    dof_vel_scale: float = 0.05
+    quat_scale: float = 1.0
+    fall_height: float = 0.3
+    fall_projected_gravity: float = 0.8
+    base_contact_force: float = 1.0
 
-    def plot_thread(self):
-        plt.ion()
-        fig, ax = plt.subplots()
-        t, cmd_x, true_x = [], [], []
-        line_cmd_x, = ax.plot(t, cmd_x, 'r-')
-        line_true_x, = ax.plot(t, true_x, 'b-')
+    @property
+    def num_observations(self):
+        return self.frame_stack * self.num_single_obs
 
-        while not self.stop_event.is_set():
-            t.append(self.count_lowlevel * 0.001)
-            cmd_x.append(cmd.vx)
-            true_x.append(self.vel[0])
-            line_cmd_x.set_xdata(t)
-            line_cmd_x.set_ydata(cmd_x)
-            line_true_x.set_xdata(t)
-            line_true_x.set_ydata(true_x)
-            ax.relim()
-            ax.autoscale_view()
-            plt.draw()
-            plt.pause(0.001)
-        plt.savefig('sine_wave.png')
-        plt.ioff()
-        plt.close('all')
+    @property
+    def policy_dt(self):
+        return self.dt * self.decimation
 
-    def run_mujoco(self, policy, cfg):
-        model = mujoco.MjModel.from_xml_path(cfg.sim_config.mujoco_model_path)
-        model.opt.timestep = cfg.sim_config.dt
-        data = mujoco.MjData(model)
-        mujoco.mj_step(model, data)
-        viewer = None if self.headless else mujoco_viewer.MujocoViewer(model, data)
 
-        def key_callback(window, key, scancode, action, mods):
-            # 处理运动控制键
-            if key in self.key_states:
-                self.key_states[key] = action == glfw.PRESS
-            
-            # 实现图片中的可视化功能（保持原有）
-            if key == glfw.KEY_C and action == glfw.PRESS:
-                viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] ^= 1
-            if key == glfw.KEY_J and action == glfw.PRESS:
-                viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] ^= 1
-            if key == glfw.KEY_G and action == glfw.PRESS:
-                viewer._graph._visible ^= 1
-            if key == glfw.KEY_M and action == glfw.PRESS:
-                viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_COM] ^= 1
+KP = np.array([40, 20, 20, 40, 40, 20] * 2, dtype=np.float64)
+KD = np.array([0.6, 0.4, 0.4, 0.6, 0.6, 0.4] * 2, dtype=np.float64)
+TAU_LIMIT = np.full(12, 17.85, dtype=np.float64)
 
-        if not self.headless:
-            glfw.set_key_callback(viewer.window, key_callback)
-            self.window = viewer.window
 
-        target_q = np.zeros((cfg.env.num_actions), dtype=np.double)
-        action = np.zeros((cfg.env.num_actions), dtype=np.double)
+def wrap_to_pi(angle):
+    return (angle + math.pi) % (2 * math.pi) - math.pi
 
-        hist_obs = deque()
-        for _ in range(cfg.env.frame_stack):
-            hist_obs.append(np.zeros([1, cfg.env.num_single_obs], dtype=np.double))
 
-        for _ in tqdm(range(int(cfg.sim_config.sim_duration / cfg.sim_config.dt)), desc="Simulating..."):
-            if not self.headless and glfw.window_should_close(self.window):
+def quaternion_to_rotation_matrix(quat_xyzw):
+    x, y, z, w = quat_xyzw
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+
+
+def quaternion_to_euler(quat_xyzw):
+    x, y, z, w = quat_xyzw
+    roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    pitch = math.asin(np.clip(2 * (w * y - z * x), -1.0, 1.0))
+    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    return np.array([roll, pitch, yaw], dtype=np.float64)
+
+
+def swap_leg_halves(values):
+    values = np.asarray(values, dtype=np.float64)
+    return np.concatenate((values[6:12], values[:6]))
+
+
+def get_state(data, num_actions):
+    # MuJoCo framequat is [w, x, y, z]; policy helpers use [x, y, z, w].
+    quat = data.sensor("orientation").data[[1, 2, 3, 0]].astype(np.float64)
+    rotation = quaternion_to_rotation_matrix(quat)
+    body_velocity = rotation.T @ data.qvel[:3].astype(np.float64)
+    body_angular_velocity = data.sensor("angular-velocity").data.astype(np.float64).copy()
+    projected_gravity = rotation.T @ np.array([0.0, 0.0, -1.0])
+    euler = quaternion_to_euler(quat)
+
+    # Preserve the deployment mapping used by the original sim2sim script.
+    q = swap_leg_halves(data.qpos[-num_actions:])
+    dq = swap_leg_halves(data.qvel[-num_actions:])
+    # The MJCF uses three slide joints under a body with a non-zero initial pos,
+    # so qpos[:3] is displacement rather than the absolute base position.
+    position = data.sensor("position").data.astype(np.float64).copy()
+    return q, dq, position, body_velocity, body_angular_velocity, projected_gravity, euler
+
+
+def pd_control(target_q, q, target_dq, dq):
+    return np.clip((target_q - q) * KP + (target_dq - dq) * KD, -TAU_LIMIT, TAU_LIMIT)
+
+
+def base_has_terminating_contact(model, data, force_threshold):
+    base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+    force = np.zeros(6, dtype=np.float64)
+    for contact_id in range(data.ncon):
+        contact = data.contact[contact_id]
+        body1 = model.geom_bodyid[contact.geom1]
+        body2 = model.geom_bodyid[contact.geom2]
+        if body1 != base_body_id and body2 != base_body_id:
+            continue
+        mujoco.mj_contactForce(model, data, contact_id, force)
+        if np.linalg.norm(force[:3]) > force_threshold:
+            return True
+    return False
+
+
+def termination_reason(model, data, state, cfg):
+    _, _, position, _, _, projected_gravity, _ = state
+    if base_has_terminating_contact(model, data, cfg.base_contact_force):
+        return "base_contact"
+    if position[2] < cfg.fall_height:
+        return "base_height"
+    if abs(projected_gravity[0]) > cfg.fall_projected_gravity:
+        return "orientation_x"
+    if abs(projected_gravity[1]) > cfg.fall_projected_gravity:
+        return "orientation_y"
+    return ""
+
+
+def build_observation(state, previous_action, command, phase, cfg):
+    q, dq, _, _, omega, _, euler = state
+    obs = np.zeros(cfg.num_single_obs, dtype=np.float32)
+    obs[0] = math.sin(2 * math.pi * phase)
+    obs[1] = math.cos(2 * math.pi * phase)
+    obs[2] = command[0] * cfg.lin_vel_scale
+    obs[3] = command[1] * cfg.lin_vel_scale
+    obs[4] = command[2] * cfg.ang_vel_scale
+    obs[5:17] = q * cfg.dof_pos_scale
+    obs[17:29] = dq * cfg.dof_vel_scale
+    obs[29:41] = previous_action
+    obs[41:44] = omega * cfg.ang_vel_scale
+    obs[44:47] = euler * cfg.quat_scale
+    return np.clip(obs, -cfg.clip_observations, cfg.clip_observations)
+
+
+def make_trajectory_fields(num_actions):
+    fields = [
+        "case", "step", "time", "command_vx", "command_vy", "command_yaw_rate",
+        "target_heading", "position_x", "position_y", "position_z", "velocity_x",
+        "velocity_y", "velocity_z", "angular_velocity_x", "angular_velocity_y",
+        "angular_velocity_z", "roll", "pitch", "yaw", "heading_error", "terminated",
+        "termination_reason",
+    ]
+    for prefix in ("q", "dq", "action", "torque"):
+        fields.extend(f"{prefix}_{index}" for index in range(num_actions))
+    return fields
+
+
+def make_trajectory_row(case_name, step, command, target_heading, state, action, torque,
+                        terminated, reason, cfg):
+    q, dq, position, velocity, omega, _, euler = state
+    row = {
+        "case": case_name,
+        "step": step,
+        "time": step * cfg.policy_dt,
+        "command_vx": command[0],
+        "command_vy": command[1],
+        "command_yaw_rate": command[2],
+        "target_heading": target_heading,
+        "position_x": position[0],
+        "position_y": position[1],
+        "position_z": position[2],
+        "velocity_x": velocity[0],
+        "velocity_y": velocity[1],
+        "velocity_z": velocity[2],
+        "angular_velocity_x": omega[0],
+        "angular_velocity_y": omega[1],
+        "angular_velocity_z": omega[2],
+        "roll": euler[0],
+        "pitch": euler[1],
+        "yaw": euler[2],
+        "heading_error": abs(wrap_to_pi(target_heading - euler[2])),
+        "terminated": int(terminated),
+        "termination_reason": reason,
+    }
+    for prefix, values in (("q", q), ("dq", dq), ("action", action), ("torque", torque)):
+        row.update({f"{prefix}_{index}": value for index, value in enumerate(values)})
+    return row
+
+
+def create_viewer(model, data, headless):
+    if headless:
+        return None
+    try:
+        import glfw
+        import mujoco_viewer
+    except ImportError as exc:
+        raise RuntimeError(
+            "GUI mode requires glfw and mujoco-python-viewer; use --headless for data-only evaluation."
+        ) from exc
+    if not glfw.init():
+        raise RuntimeError("Could not initialize GLFW")
+    return mujoco_viewer.MujocoViewer(model, data)
+
+
+def viewer_is_open(viewer):
+    import glfw
+
+    return not glfw.window_should_close(viewer.window)
+
+
+def create_video_writer(model, output_path, cfg):
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("--record-video requires opencv-python.") from exc
+    width, height = 640, 480
+    renderer = mujoco.Renderer(model, height=height, width=width)
+    writer = cv2.VideoWriter(
+        str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), 1.0 / cfg.policy_dt, (width, height)
+    )
+    if not writer.isOpened():
+        renderer.close()
+        raise RuntimeError(f"Cannot open video output: {output_path}")
+    camera = mujoco.MjvCamera()
+    camera.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+    camera.trackbodyid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+    camera.distance = 1.2
+    camera.azimuth = 135
+    camera.elevation = -20
+    return cv2, renderer, writer, camera
+
+
+def evaluate_case(policy, cfg, case, trajectory_writer, headless, record_video, video_dir):
+    case_name, command_vx, command_vy, target_heading = case
+    model = mujoco.MjModel.from_xml_path(cfg.mujoco_model_path)
+    model.opt.timestep = cfg.dt
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    viewer = create_viewer(model, data, headless)
+    video = create_video_writer(model, video_dir / f"{case_name}.mp4", cfg) if record_video else None
+
+    history = deque(
+        (np.zeros(cfg.num_single_obs, dtype=np.float32) for _ in range(cfg.frame_stack)),
+        maxlen=cfg.frame_stack,
+    )
+    previous_action = np.zeros(cfg.num_actions, dtype=np.float64)
+    target_q = np.zeros(cfg.num_actions, dtype=np.float64)
+    target_dq = np.zeros(cfg.num_actions, dtype=np.float64)
+    last_torque = np.zeros(cfg.num_actions, dtype=np.float64)
+    errors = np.zeros(4, dtype=np.float64)
+    steps = 0
+    reason = ""
+    max_steps = int(math.ceil(cfg.duration / cfg.policy_dt))
+
+    try:
+        for policy_step in tqdm(range(max_steps), desc=case_name):
+            if viewer is not None and not viewer_is_open(viewer):
+                reason = "viewer_closed"
                 break
 
-            if not self.headless:
-                # 运动控制处理（新增WSAD）
-                cmd.vx = 0.5 * (self.key_states[glfw.KEY_UP] or self.key_states[glfw.KEY_W])
-                cmd.vx -= 0.5 * (self.key_states[glfw.KEY_DOWN] or self.key_states[glfw.KEY_S])
-                cmd.vy = 0.5 * (self.key_states[glfw.KEY_A] - self.key_states[glfw.KEY_D])
-                cmd.dyaw = 1.0 * (self.key_states[glfw.KEY_LEFT] - self.key_states[glfw.KEY_RIGHT])
+            state = get_state(data, cfg.num_actions)
+            current_yaw = state[-1][2]
+            command_yaw = np.clip(0.5 * wrap_to_pi(target_heading - current_yaw), -1.0, 1.0)
+            command = np.array([command_vx, command_vy, command_yaw], dtype=np.float64)
+            phase = policy_step * cfg.policy_dt / cfg.cycle_time
+            history.append(build_observation(state, previous_action, command, phase, cfg))
+            policy_input = np.concatenate(history).reshape(1, cfg.num_observations)
+            with torch.no_grad():
+                action = policy(torch.from_numpy(policy_input))[0].detach().cpu().numpy()
+            action = np.clip(action, -cfg.clip_actions, cfg.clip_actions).astype(np.float64)
+            target_q[:] = action * cfg.action_scale
 
-            q, dq, quat, v, omega, gvec = self.get_obs(data)
-            q = q[-cfg.env.num_actions:]
-            dq = dq[-cfg.env.num_actions:]
-            for i in range(6):
-                q[i], q[i+6] = q[i+6], q[i]
-                dq[i], dq[i+6] = dq[i+6], dq[i]
+            for _ in range(cfg.decimation):
+                q, dq, *_ = get_state(data, cfg.num_actions)
+                last_torque = pd_control(target_q, q, target_dq, dq)
+                data.ctrl[:] = swap_leg_halves(last_torque)
+                mujoco.mj_step(model, data)
 
-            if self.count_lowlevel % cfg.sim_config.decimation == 0:
-                obs = np.zeros([1, cfg.env.num_single_obs], dtype=np.float32)
-                eu_ang = self.quaternion_to_euler_array(quat)
-                eu_ang[eu_ang > math.pi] -= 2 * math.pi
+            state = get_state(data, cfg.num_actions)
+            _, _, _, velocity, omega, _, euler = state
+            reason = termination_reason(model, data, state, cfg)
+            terminated = bool(reason)
+            errors += (
+                abs(velocity[0] - command[0]),
+                abs(velocity[1] - command[1]),
+                abs(omega[2] - command[2]),
+                abs(wrap_to_pi(target_heading - euler[2])),
+            )
+            steps += 1
+            trajectory_writer.writerow(
+                make_trajectory_row(
+                    case_name, steps, command, target_heading, state, action, last_torque,
+                    terminated, reason, cfg,
+                )
+            )
+            previous_action[:] = action
 
-                # 与 Isaac Gym 训练环境的 rewards.cycle_time = 0.4 保持一致。
-                obs[0, 0] = math.sin(2 * math.pi * self.count_lowlevel * cfg.sim_config.dt / 0.4)
-                obs[0, 1] = math.cos(2 * math.pi * self.count_lowlevel * cfg.sim_config.dt / 0.4)
-                obs[0, 2] = cmd.vx * cfg.normalization.obs_scales.lin_vel
-                obs[0, 3] = cmd.vy * cfg.normalization.obs_scales.lin_vel
-                obs[0, 4] = cmd.dyaw * cfg.normalization.obs_scales.ang_vel
-                obs[0, 5:17] = q * cfg.normalization.obs_scales.dof_pos
-                obs[0, 17:29] = dq * cfg.normalization.obs_scales.dof_vel
-                obs[0, 29:41] = action
-                obs[0, 41:44] = omega
-                obs[0, 44:47] = eu_ang
-
-                obs = np.clip(obs, -cfg.normalization.clip_observations, cfg.normalization.clip_observations)
-                hist_obs.append(obs)
-                hist_obs.popleft()
-
-                policy_input = np.zeros([1, cfg.env.num_observations], dtype=np.float32)
-                for i in range(cfg.env.frame_stack):
-                    policy_input[0, i * cfg.env.num_single_obs : (i + 1) * cfg.env.num_single_obs] = hist_obs[i][0, :]
-                action[:] = policy(torch.tensor(policy_input))[0].detach().numpy()
-                action = np.clip(action, -cfg.normalization.clip_actions, cfg.normalization.clip_actions)
-                target_q = action * cfg.control.action_scale
-
-            target_dq = np.zeros((cfg.env.num_actions), dtype=np.double)
-            tau = self.pd_control(target_q, q, cfg.robot_config.kps,
-                            target_dq, dq, cfg.robot_config.kds)
-            tau = np.clip(tau, -cfg.robot_config.tau_limit, cfg.robot_config.tau_limit)
-            for i in range(6):
-                tau[i], tau[i+6] = tau[i+6], tau[i]
-            data.ctrl = tau
-
-            mujoco.mj_step(model, data)
-
-            if not self.headless:
-                time.sleep(0.001)#步伐频率加快建议设置0.001，步伐频率加快建议设置0.01
-                if self.count_lowlevel % cfg.sim_config.decimation == 0:
-                    viewer.render()
-            self.count_lowlevel += 1
-
-        self.stop_event.set()
+            if viewer is not None:
+                viewer.render()
+                time.sleep(cfg.policy_dt)
+            if video is not None:
+                cv2, renderer, writer, camera = video
+                renderer.update_scene(data, camera=camera)
+                writer.write(cv2.cvtColor(renderer.render(), cv2.COLOR_RGB2BGR))
+            if terminated:
+                break
+    finally:
         if viewer is not None:
             viewer.close()
+            import glfw
 
-if __name__ == '__main__':
-    import argparse
-    print(LEGGED_GYM_ROOT_DIR)
-    parser = argparse.ArgumentParser(description='Deployment script.')
-    parser.add_argument('--load_model', type=str, required=False,
-                        help='Run to load from.',
-                        default=f"{LEGGED_GYM_ROOT_DIR}/logs/Pai_ppo/exported/policies/policy_1.pt")
-    parser.add_argument('--terrain', action='store_true', help='terrain or plane')
-    parser.add_argument('--headless', action='store_true', help='Run without GLFW viewer')
-    args = parser.parse_args()
-
-    class Sim2simCfg(PaiCfg):
-        class sim_config:
-            mujoco_model_path = f'{LEGGED_GYM_ROOT_DIR}/resources/robots/pi_12dof_release_v1/mjcf/pi_12dof_release_v1.xml'
-            sim_duration = 60.0
-            dt = 0.001
-            decimation = 10
-
-        class robot_config:
-            kps = [40,20,20,40,40,20]*(2)
-            kds = [0.6,0.4,0.4,0.6,0.6,0.4]*(2)
-            # URDF effort=21 Nm，训练环境按 safety.torque_limit=0.85 缩放。
-            tau_limit = 17.85 * np.ones(12, dtype=np.double)
-
-    policy = torch.jit.load(args.load_model)
-    visualizer = mujoco_visual(headless=args.headless)
-
-    if args.headless:
-        visualizer.run_mujoco(policy, Sim2simCfg())
-        print("Headless simulation completed.")
-    else:
-        if not glfw.init():
-            raise RuntimeError("Could not initialize GLFW")
-
-        try:
-            matplotlib_thread = threading.Thread(target=visualizer.plot_thread)
-            mujoco_thread = threading.Thread(target=visualizer.run_mujoco, args=(policy, Sim2simCfg()))
-            matplotlib_thread.start()
-            mujoco_thread.start()
-            matplotlib_thread.join()
-            mujoco_thread.join()
-        finally:
             glfw.terminate()
-        print("Simulation completed. GLFW terminated.")
+        if video is not None:
+            _, renderer, writer, _ = video
+            writer.release()
+            renderer.close()
+
+    timeout = int(steps == max_steps and not reason)
+    divisor = max(steps, 1)
+    return {
+        "case": case_name,
+        "env_id": 0,
+        "command_vx": command_vx,
+        "command_vy": command_vy,
+        "target_heading": target_heading,
+        "steps": steps,
+        "seconds": steps * cfg.policy_dt,
+        "timeout": timeout,
+        "termination_reason": reason or "timeout",
+        "vx_mae": errors[0] / divisor,
+        "vy_mae": errors[1] / divisor,
+        "yaw_rate_mae": errors[2] / divisor,
+        "heading_mae": errors[3] / divisor,
+    }
+
+
+def resolve_run_dir(load_model, explicit_run_dir):
+    if explicit_run_dir:
+        run_dir = Path(explicit_run_dir).expanduser().resolve()
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
+        return run_dir
+
+    model_path = Path(load_model).expanduser().resolve()
+    for parent in model_path.parents:
+        if any(parent.glob("model_*.pt")):
+            return parent
+
+    # Exported policies do not encode their source run, so use the newest run by default.
+    if model_path.parent.name == "policies" and model_path.parent.parent.name == "exported":
+        experiment_dir = model_path.parent.parent.parent
+        candidates = [
+            path for path in experiment_dir.iterdir()
+            if path.is_dir() and path.name != "exported" and any(path.glob("model_*.pt"))
+        ]
+        if candidates:
+            return max(candidates, key=lambda path: path.stat().st_mtime)
+
+    raise ValueError(
+        "Cannot infer the training run from --load_model. Pass --run_dir, for example "
+        "--run_dir logs/gru/Nov08_22-06-57_v2."
+    )
+
+
+def create_output_dir(args):
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser().resolve()
+    else:
+        run_dir = resolve_run_dir(args.load_model, args.run_dir)
+        output_dir = run_dir / "sim2sim" / (
+            datetime.now().strftime("%Y%m%d_%H%M%S_%f") + f"_seed{args.seed}"
+        )
+    output_dir.mkdir(parents=True, exist_ok=False)
+    return output_dir
+
+
+def write_report(output_dir, args, cfg, rows):
+    with (output_dir / "report.txt").open("w", encoding="utf-8") as report:
+        report.write(f"Policy: {Path(args.load_model).resolve()}\n")
+        report.write(f"MuJoCo model: {Path(cfg.mujoco_model_path).resolve()}\n")
+        report.write(f"Seed: {args.seed}\nEngine: MuJoCo {mujoco.__version__}\nEnvironments: 1\n")
+        report.write(f"Episode limit: {cfg.duration}s; policy dt: {cfg.policy_dt}s\n")
+        report.write("Each command starts from a fresh MuJoCo model and data state.\n")
+        report.write("No domain randomization, additional observation noise, action delay, or scheduled pushes are applied.\n")
+        report.write("Sensor noise declared in the MuJoCo XML remains active when supported by the installed version.\n")
+        report.write("Timeout=1 means the episode reached its time limit; timeout=0 means early termination.\n")
+        report.write("Per-policy-step state, action, and torque data: trajectory.csv\n")
+        report.write(f"Videos: {output_dir / 'videos' if args.record_video else 'disabled'}\n\n")
+        for row in rows:
+            report.write(
+                f"{row['case']}: vx={row['command_vx']}, vy={row['command_vy']}, "
+                f"target_heading={row['target_heading']:.3f}; timeout={row['timeout']}, "
+                f"seconds={row['seconds']:.3f}, termination={row['termination_reason']}, "
+                f"vx_mae={row['vx_mae']:.3f}, vy_mae={row['vy_mae']:.3f}, "
+                f"yaw_rate_mae={row['yaw_rate_mae']:.3f}, heading_mae={row['heading_mae']:.3f}\n"
+            )
+
+
+def evaluate(args):
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    model_path = Path(args.load_model).expanduser().resolve()
+    if not model_path.is_file():
+        raise FileNotFoundError(f"Policy does not exist: {model_path}")
+
+    cfg = Sim2simConfig(
+        mujoco_model_path=str(Path(args.mujoco_model).expanduser().resolve()),
+        duration=args.duration,
+    )
+    output_dir = create_output_dir(args)
+    video_dir = output_dir / "videos"
+    if args.record_video:
+        video_dir.mkdir()
+
+    policy = torch.jit.load(str(model_path), map_location="cpu")
+    policy.eval()
+    selected_names = set(args.cases) if args.cases else None
+    cases = [case for case in COMMANDS if selected_names is None or case[0] in selected_names]
+    episode_fields = [
+        "case", "env_id", "command_vx", "command_vy", "target_heading", "steps",
+        "seconds", "timeout", "termination_reason", "vx_mae", "vy_mae",
+        "yaw_rate_mae", "heading_mae",
+    ]
+    rows = []
+    try:
+        with (output_dir / "trajectory.csv").open("w", newline="", encoding="utf-8") as trajectory_file:
+            trajectory_writer = csv.DictWriter(
+                trajectory_file, fieldnames=make_trajectory_fields(cfg.num_actions)
+            )
+            trajectory_writer.writeheader()
+            for case in cases:
+                row = evaluate_case(
+                    policy, cfg, case, trajectory_writer, args.headless, args.record_video, video_dir
+                )
+                rows.append(row)
+                trajectory_file.flush()
+
+        with (output_dir / "episodes.csv").open("w", newline="", encoding="utf-8") as episodes_file:
+            writer = csv.DictWriter(episodes_file, fieldnames=episode_fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        write_report(output_dir, args, cfg, rows)
+        metadata = {
+            "policy": str(model_path),
+            "run_dir": str(resolve_run_dir(args.load_model, args.run_dir)) if not args.output_dir else None,
+            "output_dir": str(output_dir),
+            "seed": args.seed,
+            "cases": [case[0] for case in cases],
+            "config": asdict(cfg),
+        }
+        with (output_dir / "metadata.json").open("w", encoding="utf-8") as metadata_file:
+            json.dump(metadata, metadata_file, ensure_ascii=False, indent=2)
+    except Exception:
+        print(f"Evaluation failed; partial results remain in: {output_dir}")
+        raise
+
+    print(f"Sim2sim evaluation saved to: {output_dir}")
+    return output_dir
+
+
+def parse_args():
+    default_policy = Path(LEGGED_GYM_ROOT_DIR) / "logs/gru/exported/policies/policy_torch.pt"
+    default_mujoco_model = (
+        Path(LEGGED_GYM_ROOT_DIR)
+        / "resources/robots/pi_12dof_release_v1/mjcf/pi_12dof_release_v1.xml"
+    )
+    parser = argparse.ArgumentParser(description="Evaluate an exported policy in MuJoCo.")
+    parser.add_argument("--load_model", default=str(default_policy), help="TorchScript policy path.")
+    parser.add_argument(
+        "--run_dir",
+        help="Training run directory. Results are saved under <run_dir>/sim2sim/<timestamp>.",
+    )
+    parser.add_argument("--output_dir", help="Exact output directory override, mainly for smoke tests.")
+    parser.add_argument("--mujoco_model", default=str(default_mujoco_model), help="MuJoCo XML path.")
+    parser.add_argument("--duration", type=float, default=12.0, help="Maximum seconds per case.")
+    parser.add_argument("--seed", type=int, default=123145)
+    parser.add_argument(
+        "--cases", nargs="+", choices=[case[0] for case in COMMANDS],
+        help="Cases to run; omit to run all play.py command cases.",
+    )
+    parser.add_argument("--headless", action="store_true", help="Run without a GLFW viewer.")
+    parser.add_argument("--record-video", action="store_true", help="Save one MP4 per command case.")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    evaluate(parse_args())
