@@ -31,8 +31,8 @@ class PaiCfg(LeggedRobotCfg):
         # 位置/速度系数仅用于记录 URDF 上限；当前 PD 输出实际按力矩上限裁剪。
         pos_limit = 1.0
         vel_limit = 1.0
-        # 最大关节力矩 = URDF effort × (16 / 21) = 16 N·m。
-        torque_limit = 16.0 / 21.0
+        # 最大关节力矩 = URDF effort × 0.85。
+        torque_limit = 0.85
 
     class asset(LeggedRobotCfg.asset):
         # Isaac Gym 加载的 URDF；换机器人时还须检查关节顺序、观测和奖励索引。
