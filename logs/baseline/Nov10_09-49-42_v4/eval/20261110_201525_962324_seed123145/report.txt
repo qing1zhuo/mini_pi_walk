@@ -1,0 +1,26 @@
+Checkpoint: /home/jingwei/minipi/mini_pi_walk/logs/baseline/Nov10_09-49-42_v4/model_10001.pt
+Seed: 123145
+Task: pai_ppo
+Environments: 64
+Episode limit: 12s; policy dt: 0.010000000474974513s
+Friction range: [0.1, 2.0]; fixed per env, see episodes.csv
+Base mass range: [-1.0, 1.0]; fixed per env, see episodes.csv
+Push schedule: step 0, then every 4s; velocity overwrite bounds: xy=0.2, angular=0.4
+Push samples and active status: pushes.csv; same samples at each scheduled step for every case.
+Other stochastic effects: observation noise and action delay/noise; reset seed is identical for every case.
+Reward columns are weighted episode sums before total-reward clipping; they need not sum to total_reward.
+Timeout=1 means the episode reached its time limit; timeout=0 means early termination.
+GPU physics may not reproduce bit for bit across runs.
+Videos: /home/jingwei/minipi/mini_pi_walk/logs/baseline/Nov10_09-49-42_v4/eval/20261110_201525_962324_seed123145/videos
+
+stand: vx=0.0, vy=0.0, target_heading=0.000; timeout_rate=0.938, mean_reward=368.681, vx_mae=0.025, vy_mae=0.087, yaw_rate_mae=0.160, heading_mae=0.027
+forward_slow: vx=0.3, vy=0.0, target_heading=0.000; timeout_rate=0.984, mean_reward=332.652, vx_mae=0.047, vy_mae=0.068, yaw_rate_mae=0.209, heading_mae=0.044
+forward_fast: vx=0.6, vy=0.0, target_heading=0.000; timeout_rate=0.266, mean_reward=154.901, vx_mae=0.254, vy_mae=0.104, yaw_rate_mae=0.379, heading_mae=0.133
+backward: vx=-0.3, vy=0.0, target_heading=0.000; timeout_rate=0.984, mean_reward=314.556, vx_mae=0.049, vy_mae=0.085, yaw_rate_mae=0.242, heading_mae=0.046
+left: vx=0.0, vy=0.3, target_heading=0.000; timeout_rate=1.000, mean_reward=358.201, vx_mae=0.026, vy_mae=0.107, yaw_rate_mae=0.199, heading_mae=0.029
+right: vx=0.0, vy=-0.3, target_heading=0.000; timeout_rate=0.984, mean_reward=363.238, vx_mae=0.023, vy_mae=0.123, yaw_rate_mae=0.185, heading_mae=0.050
+turn_left: vx=0.0, vy=0.0, target_heading=1.571; timeout_rate=0.984, mean_reward=392.238, vx_mae=0.023, vy_mae=0.084, yaw_rate_mae=0.151, heading_mae=0.307
+turn_right: vx=0.0, vy=0.0, target_heading=-1.571; timeout_rate=0.953, mean_reward=378.786, vx_mae=0.028, vy_mae=0.084, yaw_rate_mae=0.159, heading_mae=0.273
+turn_around: vx=0.0, vy=0.0, target_heading=3.142; timeout_rate=0.984, mean_reward=398.681, vx_mae=0.024, vy_mae=0.082, yaw_rate_mae=0.156, heading_mae=0.628
+forward_turn_left: vx=0.3, vy=0.0, target_heading=1.571; timeout_rate=0.953, mean_reward=343.778, vx_mae=0.049, vy_mae=0.070, yaw_rate_mae=0.200, heading_mae=0.317
+forward_turn_right: vx=0.3, vy=0.0, target_heading=-1.571; timeout_rate=0.984, mean_reward=340.857, vx_mae=0.046, vy_mae=0.068, yaw_rate_mae=0.208, heading_mae=0.272
