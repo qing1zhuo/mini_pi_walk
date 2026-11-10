@@ -2,9 +2,9 @@
 
 基于 NVIDIA Isaac Gym 的 Pi 双足机器人强化学习项目，支持 PPO 训练及 MuJoCo sim2sim 验证。
 
-baseline-v1 策略实机演示
+baseline-v3 策略实机演示
 
-[观看 baseline-v1 实机演示视频](./video.mp4)
+[观看 baseline-v3 实机演示视频](./video.mp4)
 
 以下为实验记录，策略的训练流程等请看docs
 
@@ -113,5 +113,7 @@ baseline-v1 策略实机演示
    可以观察到，大部分策略在仿真中的vae，跑满率等指标差异并不大，但是在真机上实测后，差异极大
 
 4. **网络架构仍有探索空间**
+
   当前actor架构采用transformer处理时序关系，其他轻量级时序网络也可能达成相似效果并显著减少训练显存占用
+  
   且critic网络仍为官方仓库的mlp架构，也有探索空间
